@@ -1,0 +1,155 @@
+version: '3.9'
+
+services:
+  postgres-task:
+    image: postgres:16
+    container_name: task-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: task_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_task_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d task_manager"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  postgres-auth:
+    image: postgres:16
+    container_name: auth-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: auth_task_manager
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auth_task_manager"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  migrate-task:
+    image: migrate/migrate:4
+    depends_on:
+      postgres-task:
+        condition: service_healthy
+    volumes:
+      - ./task-service/migrations:/migrations
+    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres@postgres-task:5432/task_manager?sslmode=disable", "up"]
+    restart: "no"
+    networks:
+      - backend
+
+  migrate-auth:
+    image: migrate/migrate:4
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+    volumes:
+      - ./auth-service/migrations:/migrations
+    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres@postgres-auth:5432/auth_task_manager?sslmode=disable", "up", "-verbose"]
+    restart: "no"
+    networks:
+      - backend
+
+  task-app:
+    build: ./task-service
+    container_name: task-app
+    depends_on:
+      postgres-task:
+        condition: service_healthy
+      migrate-task:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: postgres-task
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: task_manager
+      GIN_MODE: release
+    ports:
+      - "8080:8080"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  auth-app:
+    build: ./auth-service
+    container_name: auth-app
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+      migrate-auth:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8081"
+      SERVER_MODE: "release"
+      DB_HOST: postgres-auth
+      DB_NAME: auth_task_manager
+      POSTGRES_HOST: postgres-auth
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_NAME: auth_task_manager
+      JWT_SECRET_KEY: "super-secret-key-change-this-in-production-2026"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      GIN_MODE: release
+    ports:
+      - "8081:8081"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  email-service:
+    build: ./email-service
+    container_name: email-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+    networks:
+      - backend
+    restart: unless-stopped
+
+networks:
+  backend:
+    driver: bridge
+    name: task_system_backend
+
+volumes:
+  postgres_task_data:
+  postgres_auth_data:
+  rabbitmq_data:
