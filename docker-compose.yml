@@ -77,7 +77,7 @@ services:
         condition: service_healthy
     volumes:
       - ./auth-service/migrations:/migrations
-    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres@postgres-auth:5432/auth_task_manager?sslmode=disable", "up", "-verbose"]
+    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres@postgres-auth:5432/auth_task_manager?sslmode=disable", "up"]
     restart: "no"
     networks:
       - backend
@@ -87,6 +87,8 @@ services:
     container_name: task-app
     depends_on:
       postgres-task:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       migrate-task:
         condition: service_completed_successfully
@@ -123,6 +125,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_NAME: auth_task_manager
+      JWT_ACCESS_TTL: '15m'
+      JWT_REFRESH_TTL: '168h'
       JWT_SECRET_KEY: "super-secret-key-change-this-in-production-2026"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       GIN_MODE: release
